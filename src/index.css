@@ -1,0 +1,14 @@
+:root {
+  font-family: 'Trebuchet MS', Aptos, sans-serif;
+  color: #34443c;
+  background: #f3f6f3;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* { box-sizing: border-box; }
+body { min-width: 320px; min-height: 100vh; margin: 0; }
+button { font: inherit; }
+#root { min-height: 100vh; }
