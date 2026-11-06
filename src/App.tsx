@@ -16,7 +16,8 @@ type Card = {
 
 type AccessLog = {
   id: number
-  card_id: number
+  card_id: number | null
+  card_uid?: string
   authorized: boolean
   accessed_at: string
 }
@@ -117,13 +118,14 @@ function App() {
           </thead>
           <tbody>
             {logs.map((log) => {
-              const card = cardsById.get(log.card_id)
+              const card = log.card_id ? cardsById.get(log.card_id) : undefined
               const user = card ? usersById.get(card.user_id) : undefined
+              const cardLabel = card?.card_uid || log.card_uid || (log.card_id ? `#${log.card_id}` : 'Desconhecido')
               return (
                 <tr key={log.id}>
                   <td><span className={`pill ${log.authorized ? 'pill-success' : 'pill-danger'}`}>{log.authorized ? 'Autorizado' : 'Negado'}</span></td>
                   <td>{user?.name ?? 'Pessoa não identificada'}</td>
-                  <td><code>{card?.card_uid ?? `#${log.card_id}`}</code></td>
+                  <td><code>{cardLabel}</code></td>
                   <td>{formatDate(log.accessed_at)}</td>
                 </tr>
               )
