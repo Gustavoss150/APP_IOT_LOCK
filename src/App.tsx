@@ -22,6 +22,13 @@ type AccessLog = {
   accessed_at: string
 }
 
+type EnrollmentStatus = {
+  active: boolean
+  user_id: number
+  card?: Card
+  error?: string
+}
+
 type View = 'overview' | 'users' | 'cards' | 'accesses'
 type DashboardData = { users: User[]; cards: Card[]; logs: AccessLog[] }
 
@@ -107,6 +114,14 @@ function App() {
   const [modalError, setModalError] = useState<string | null>(null)
   const [submittingUser, setSubmittingUser] = useState(false)
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
+
+  const [isCardModalOpen, setIsCardModalOpen] = useState(false)
+  const [selectedUserId, setSelectedUserId] = useState<string>('')
+  const [manualCardUid, setManualCardUid] = useState('')
+  const [enrollingRfid, setEnrollingRfid] = useState(false)
+  const [cardModalError, setCardModalError] = useState<string | null>(null)
+  const [cardModalSuccess, setCardModalSuccess] = useState<string | null>(null)
+  const [submittingCard, setSubmittingCard] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -239,6 +254,110 @@ function App() {
       setDeletingUserId(null)
     }
   }
+
+  function openCardModal() {
+    const defaultUser = data.users[0] ? String(data.users[0].id) : ''
+    setSelectedUserId(defaultUser)
+    setManualCardUid('')
+    setEnrollingRfid(false)
+    setCardModalError(null)
+    setCardModalSuccess(null)
+    setIsCardModalOpen(true)
+  }
+
+  async function closeCardModal() {
+    if (enrollingRfid) {
+      try {
+        await post('/cards/enrollment/cancel', {})
+      } catch {
+        // Ignora falha ao cancelar modo de cadastro
+      }
+    }
+    setEnrollingRfid(false)
+    setIsCardModalOpen(false)
+    setCardModalError(null)
+    setCardModalSuccess(null)
+  }
+
+  async function handleStartRfidEnrollment() {
+    const userIdNum = Number(selectedUserId)
+    if (!userIdNum) {
+      setCardModalError('Selecione uma pessoa primeiro.')
+      return
+    }
+
+    setCardModalError(null)
+    setCardModalSuccess(null)
+    try {
+      await post<EnrollmentStatus>('/cards/enrollment/start', { user_id: userIdNum })
+      setEnrollingRfid(true)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao iniciar leitura pelo RFID da porta'
+      setCardModalError(message)
+    }
+  }
+
+  async function handleManualCardSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const userIdNum = Number(selectedUserId)
+    const uid = manualCardUid.trim().toUpperCase()
+    if (!userIdNum) {
+      setCardModalError('Selecione uma pessoa.')
+      return
+    }
+    if (!uid) {
+      setCardModalError('Passe o cartão no leitor da porta ou digite o UID manualmente.')
+      return
+    }
+
+    setSubmittingCard(true)
+    setCardModalError(null)
+    try {
+      const created = await post<Card>('/cards', { card_uid: uid, user_id: userIdNum })
+      setData((current) => ({
+        ...current,
+        cards: [...current.cards.filter((c) => c.id !== created.id), created],
+      }))
+      setIsCardModalOpen(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao cadastrar cartão'
+      setCardModalError(message)
+    } finally {
+      setSubmittingCard(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!isCardModalOpen || !enrollingRfid) return
+
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await get<EnrollmentStatus>('/cards/enrollment/status')
+        if (status.card) {
+          const enrolledCard = status.card
+          setEnrollingRfid(false)
+          setManualCardUid(enrolledCard.card_uid)
+          setCardModalSuccess(`Cartão ${enrolledCard.card_uid} lido na porta e vinculado com sucesso!`)
+          setData((current) => {
+            const exists = current.cards.some((c) => c.id === enrolledCard.id)
+            return {
+              ...current,
+              cards: exists
+                ? current.cards.map((c) => (c.id === enrolledCard.id ? enrolledCard : c))
+                : [...current.cards, enrolledCard],
+            }
+          })
+        } else if (!status.active && status.error) {
+          setEnrollingRfid(false)
+          setCardModalError(status.error)
+        }
+      } catch {
+        // Ignora falha transitória de polling
+      }
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [isCardModalOpen, enrollingRfid])
 
   const usersById = new Map(data.users.map((user) => [user.id, user]))
   const cardsById = new Map(data.cards.map((card) => [card.id, card]))
@@ -444,7 +563,23 @@ function App() {
             {renderUsers(data.users)}
           </section>
         )}
-        {view === 'cards' && <section className="data-section"><div className="section-heading"><div><p className="eyebrow">CREDENCIAIS</p><h2>Cartões cadastrados</h2></div><span className="record-count">{data.cards.length} registros</span></div>{renderCards(data.cards)}</section>}
+        {view === 'cards' && (
+          <section className="data-section">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">CREDENCIAIS</p>
+                <h2>Cartões cadastrados</h2>
+              </div>
+              <div className="section-actions">
+                <span className="record-count">{data.cards.length} registros</span>
+                <button type="button" className="primary-button" onClick={openCardModal}>
+                  + Cadastrar cartão
+                </button>
+              </div>
+            </div>
+            {renderCards(data.cards)}
+          </section>
+        )}
         {view === 'accesses' && <section className="data-section"><div className="section-heading"><div><p className="eyebrow">AUDITORIA</p><h2>Histórico de acessos</h2></div><span className="record-count">{data.logs.length} registros</span></div>{renderAccesses(data.logs)}</section>}
 
         <footer className="page-footer"><span>IoT Lock</span><span>{updatedAt ? `Última leitura ${formatDate(updatedAt.toISOString())}` : 'Sem leitura recente'}</span></footer>
@@ -515,6 +650,92 @@ function App() {
                 <button type="submit" className="primary-button" disabled={submittingUser}>
                   {submittingUser ? 'Salvando...' : 'Salvar cadastro'}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isCardModalOpen && (
+        <div className="modal-backdrop" role="presentation" onClick={() => void closeCardModal()}>
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-card-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">CREDENCIAIS RFID</p>
+                <h2 id="modal-card-title">Cadastrar cartão</h2>
+              </div>
+              <button type="button" className="modal-close" aria-label="Fechar modal" onClick={() => void closeCardModal()}>
+                ×
+              </button>
+            </div>
+
+            <form className="modal-form" onSubmit={(event) => void handleManualCardSubmit(event)}>
+              {cardModalError && <div className="alert alert-error">{cardModalError}</div>}
+              {cardModalSuccess && <div className="alert alert-success">{cardModalSuccess}</div>}
+
+              <label className="form-field">
+                <span>Vincular à pessoa</span>
+                <select
+                  value={selectedUserId}
+                  onChange={(event) => setSelectedUserId(event.target.value)}
+                  disabled={enrollingRfid}
+                  required
+                >
+                  <option value="" disabled>
+                    Selecione uma pessoa...
+                  </option>
+                  {data.users.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name} ({formatCpf(user.cpf)})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="rfid-enroll-box">
+                <div className="rfid-enroll-info">
+                  <strong>Leitura direta no RFID da porta</strong>
+                  <p>
+                    {enrollingRfid
+                      ? 'Modo cadastro ativo! Aproxime o cartão no leitor RFID da porta agora...'
+                      : 'Ative o modo cadastro e passe o cartão no leitor da fechadura para vinculá-lo automaticamente.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={enrollingRfid ? 'secondary-button' : 'primary-button'}
+                  onClick={() => void (enrollingRfid ? closeCardModal() : handleStartRfidEnrollment())}
+                >
+                  {enrollingRfid ? 'Aguardando cartão na porta...' : 'Ler cartão no RFID da porta'}
+                </button>
+              </div>
+
+              <label className="form-field">
+                <span>Ou digite o UID manualmente (opcional)</span>
+                <input
+                  type="text"
+                  placeholder="Ex: 01B46906"
+                  value={manualCardUid}
+                  onChange={(event) => setManualCardUid(event.target.value.toUpperCase())}
+                  disabled={enrollingRfid}
+                />
+              </label>
+
+              <div className="modal-actions">
+                <button type="button" className="secondary-button" onClick={() => void closeCardModal()} disabled={submittingCard}>
+                  Fechar
+                </button>
+                {!cardModalSuccess && (
+                  <button type="submit" className="primary-button" disabled={submittingCard || enrollingRfid || !manualCardUid.trim()}>
+                    {submittingCard ? 'Salvando...' : 'Salvar manualmente'}
+                  </button>
+                )}
               </div>
             </form>
           </div>
