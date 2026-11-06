@@ -114,6 +114,7 @@ function App() {
   const [modalError, setModalError] = useState<string | null>(null)
   const [submittingUser, setSubmittingUser] = useState(false)
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
+  const [deletingCardId, setDeletingCardId] = useState<number | null>(null)
 
   const [isCardModalOpen, setIsCardModalOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<string>('')
@@ -170,6 +171,22 @@ function App() {
       setErrors([message])
     } finally {
       setTogglingCardId(null)
+    }
+  }
+
+  async function handleDeleteCard(card: Card) {
+    setDeletingCardId(card.id)
+    try {
+      await del(`/cards/${card.id}`)
+      setData((current) => ({
+        ...current,
+        cards: current.cards.filter((item) => item.id !== card.id),
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao excluir cartão'
+      setErrors([message])
+    } finally {
+      setDeletingCardId(null)
     }
   }
 
@@ -442,31 +459,42 @@ function App() {
     return (
       <div className="table-wrap">
         <table>
-          <thead><tr><th>UID</th><th>Pessoa</th><th>Status</th><th>Ação</th></tr></thead>
+          <thead><tr><th>UID</th><th>Pessoa</th><th>Status</th><th>Ações</th></tr></thead>
           <tbody>
             {cards.map((card) => {
               const isToggling = togglingCardId === card.id
+              const isDeleting = deletingCardId === card.id
               return (
                 <tr key={card.id}>
                   <td><code>{card.card_uid}</code></td>
                   <td>{usersById.get(card.user_id)?.name ?? `Pessoa #${card.user_id}`}</td>
                   <td><span className={`pill ${card.active ? 'pill-success' : 'pill-muted'}`}>{card.active ? 'Ativo' : 'Inativo'}</span></td>
                   <td>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={card.active}
-                      disabled={isToggling}
-                      onClick={() => void toggleCardStatus(card)}
-                      className={`toggle-switch ${card.active ? 'is-active' : ''}`}
-                    >
-                      <span className="toggle-track">
-                        <span className="toggle-thumb" />
-                      </span>
-                      <span className="toggle-label">
-                        {isToggling ? 'Salvando...' : card.active ? 'Desativar' : 'Ativar'}
-                      </span>
-                    </button>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={card.active}
+                        disabled={isToggling || isDeleting}
+                        onClick={() => void toggleCardStatus(card)}
+                        className={`toggle-switch ${card.active ? 'is-active' : ''}`}
+                      >
+                        <span className="toggle-track">
+                          <span className="toggle-thumb" />
+                        </span>
+                        <span className="toggle-label">
+                          {isToggling ? 'Salvando...' : card.active ? 'Desativar' : 'Ativar'}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        disabled={isDeleting || isToggling}
+                        onClick={() => void handleDeleteCard(card)}
+                      >
+                        {isDeleting ? 'Excluindo...' : 'Excluir'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )

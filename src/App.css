@@ -85,6 +85,7 @@ td code { color: #355a49; background: #eef3ef; padding: 3px 6px; font-size: 12px
 .pill-success { background: #e6f4eb; color: #246843; }
 .pill-danger { background: #fcebe7; color: #a04331; }
 .pill-muted { background: #edf0ee; color: #64716a; }
+.row-actions { display: inline-flex; align-items: center; gap: 18px; }
 .toggle-switch { display: inline-flex; align-items: center; gap: 9px; border: 0; background: transparent; color: #203b32; padding: 0; font: 600 12px/1.2 inherit; cursor: pointer; outline: none; }
 .toggle-switch:hover:not(:disabled) .toggle-label { color: #173c2c; }
 .toggle-switch:disabled { cursor: wait; opacity: 0.65; }
