@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import './App.css'
 
 type User = {
@@ -38,6 +38,47 @@ async function get<T>(path: string): Promise<T> {
   return payload as T
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
+  }
+
+  return payload as T
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
+  }
+
+  return payload as T
+}
+
+async function del(path: string): Promise<void> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: 'DELETE',
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
+  }
+}
+
 function formatCpf(cpf: number) {
   const digits = String(cpf).padStart(11, '0')
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`
@@ -58,6 +99,14 @@ function App() {
   const [connection, setConnection] = useState<'checking' | 'online' | 'partial' | 'offline'>('checking')
   const [errors, setErrors] = useState<string[]>([])
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [togglingCardId, setTogglingCardId] = useState<number | null>(null)
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false)
+  const [newUserName, setNewUserName] = useState('')
+  const [newUserCpf, setNewUserCpf] = useState('')
+  const [newUserCardUid, setNewUserCardUid] = useState('')
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [submittingUser, setSubmittingUser] = useState(false)
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
 
   useEffect(() => {
     let active = true
@@ -91,6 +140,104 @@ function App() {
   function refreshData() {
     setLoading(true)
     setRefreshKey((key) => key + 1)
+  }
+
+  async function toggleCardStatus(card: Card) {
+    setTogglingCardId(card.id)
+    try {
+      const updated = await patch<Card>(`/cards/${card.id}/status`, { active: !card.active })
+      setData((current) => ({
+        ...current,
+        cards: current.cards.map((item) => (item.id === card.id ? updated : item)),
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao atualizar status do cartão'
+      setErrors([message])
+    } finally {
+      setTogglingCardId(null)
+    }
+  }
+
+  function openUserModal() {
+    setNewUserName('')
+    setNewUserCpf('')
+    setNewUserCardUid('')
+    setModalError(null)
+    setIsUserModalOpen(true)
+  }
+
+  function closeUserModal() {
+    if (submittingUser) return
+    setIsUserModalOpen(false)
+    setModalError(null)
+  }
+
+  async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setModalError(null)
+
+    const trimmedName = newUserName.trim()
+    const cpfDigits = newUserCpf.replace(/\D/g, '')
+    const cpfNumber = Number(cpfDigits)
+    const trimmedUid = newUserCardUid.trim().toUpperCase()
+
+    if (!trimmedName) {
+      setModalError('Informe o nome da pessoa.')
+      return
+    }
+    if (cpfDigits.length !== 11 || !cpfNumber) {
+      setModalError('Informe um CPF válido com 11 dígitos.')
+      return
+    }
+
+    setSubmittingUser(true)
+    try {
+      const createdUser = await post<User>('/users', {
+        name: trimmedName,
+        cpf: cpfNumber,
+      })
+
+      let createdCard: Card | null = null
+      if (trimmedUid) {
+        createdCard = await post<Card>('/cards', {
+          card_uid: trimmedUid,
+          user_id: createdUser.id,
+        })
+      }
+
+      setData((current) => ({
+        ...current,
+        users: [...current.users, createdUser],
+        cards: createdCard ? [...current.cards, createdCard] : current.cards,
+      }))
+      setIsUserModalOpen(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao cadastrar pessoa'
+      setModalError(message)
+    } finally {
+      setSubmittingUser(false)
+    }
+  }
+
+  async function handleDeleteUser(user: User) {
+    setDeletingUserId(user.id)
+    try {
+      const userCards = data.cards.filter((card) => card.user_id === user.id)
+      for (const card of userCards) {
+        await del(`/cards/${card.id}`)
+      }
+      await del(`/users/${user.id}`)
+      setData((current) => ({
+        ...current,
+        users: current.users.filter((item) => item.id !== user.id),
+        cards: current.cards.filter((card) => card.user_id !== user.id),
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao remover pessoa'
+      setErrors([message])
+    } finally {
+      setDeletingUserId(null)
+    }
   }
 
   const usersById = new Map(data.users.map((user) => [user.id, user]))
@@ -142,15 +289,28 @@ function App() {
     return (
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Nome</th><th>CPF</th><th>Cartões</th></tr></thead>
+          <thead><tr><th>Nome</th><th>CPF</th><th>Cartões</th><th>Ação</th></tr></thead>
           <tbody>
-            {users.map((user) => (
-              <tr key={user.id}>
-                <td>{user.name}</td>
-                <td><code>{formatCpf(user.cpf)}</code></td>
-                <td>{data.cards.filter((card) => card.user_id === user.id).length}</td>
-              </tr>
-            ))}
+            {users.map((user) => {
+              const isDeleting = deletingUserId === user.id
+              return (
+                <tr key={user.id}>
+                  <td>{user.name}</td>
+                  <td><code>{formatCpf(user.cpf)}</code></td>
+                  <td>{data.cards.filter((card) => card.user_id === user.id).length}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      disabled={isDeleting}
+                      onClick={() => void handleDeleteUser(user)}
+                    >
+                      {isDeleting ? 'Excluindo...' : 'Excluir'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -163,15 +323,35 @@ function App() {
     return (
       <div className="table-wrap">
         <table>
-          <thead><tr><th>UID</th><th>Pessoa</th><th>Status</th></tr></thead>
+          <thead><tr><th>UID</th><th>Pessoa</th><th>Status</th><th>Ação</th></tr></thead>
           <tbody>
-            {cards.map((card) => (
-              <tr key={card.id}>
-                <td><code>{card.card_uid}</code></td>
-                <td>{usersById.get(card.user_id)?.name ?? `Pessoa #${card.user_id}`}</td>
-                <td><span className={`pill ${card.active ? 'pill-success' : 'pill-muted'}`}>{card.active ? 'Ativo' : 'Inativo'}</span></td>
-              </tr>
-            ))}
+            {cards.map((card) => {
+              const isToggling = togglingCardId === card.id
+              return (
+                <tr key={card.id}>
+                  <td><code>{card.card_uid}</code></td>
+                  <td>{usersById.get(card.user_id)?.name ?? `Pessoa #${card.user_id}`}</td>
+                  <td><span className={`pill ${card.active ? 'pill-success' : 'pill-muted'}`}>{card.active ? 'Ativo' : 'Inativo'}</span></td>
+                  <td>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={card.active}
+                      disabled={isToggling}
+                      onClick={() => void toggleCardStatus(card)}
+                      className={`toggle-switch ${card.active ? 'is-active' : ''}`}
+                    >
+                      <span className="toggle-track">
+                        <span className="toggle-thumb" />
+                      </span>
+                      <span className="toggle-label">
+                        {isToggling ? 'Salvando...' : card.active ? 'Desativar' : 'Ativar'}
+                      </span>
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -247,12 +427,99 @@ function App() {
           </>
         )}
 
-        {view === 'users' && <section className="data-section"><div className="section-heading"><div><p className="eyebrow">CADASTRO</p><h2>Pessoas cadastradas</h2></div><span className="record-count">{data.users.length} registros</span></div>{renderUsers(data.users)}</section>}
+        {view === 'users' && (
+          <section className="data-section">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">CADASTRO</p>
+                <h2>Pessoas cadastradas</h2>
+              </div>
+              <div className="section-actions">
+                <span className="record-count">{data.users.length} registros</span>
+                <button type="button" className="primary-button" onClick={openUserModal}>
+                  + Cadastrar pessoa
+                </button>
+              </div>
+            </div>
+            {renderUsers(data.users)}
+          </section>
+        )}
         {view === 'cards' && <section className="data-section"><div className="section-heading"><div><p className="eyebrow">CREDENCIAIS</p><h2>Cartões cadastrados</h2></div><span className="record-count">{data.cards.length} registros</span></div>{renderCards(data.cards)}</section>}
         {view === 'accesses' && <section className="data-section"><div className="section-heading"><div><p className="eyebrow">AUDITORIA</p><h2>Histórico de acessos</h2></div><span className="record-count">{data.logs.length} registros</span></div>{renderAccesses(data.logs)}</section>}
 
         <footer className="page-footer"><span>IoT Lock</span><span>{updatedAt ? `Última leitura ${formatDate(updatedAt.toISOString())}` : 'Sem leitura recente'}</span></footer>
       </main>
+
+      {isUserModalOpen && (
+        <div className="modal-backdrop" role="presentation" onClick={closeUserModal}>
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-user-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">NOVO REGISTRO</p>
+                <h2 id="modal-user-title">Cadastrar pessoa</h2>
+              </div>
+              <button type="button" className="modal-close" aria-label="Fechar modal" onClick={closeUserModal}>
+                ×
+              </button>
+            </div>
+
+            <form className="modal-form" onSubmit={(event) => void handleCreateUser(event)}>
+              {modalError && <div className="alert alert-error">{modalError}</div>}
+
+              <label className="form-field">
+                <span>Nome completo</span>
+                <input
+                  type="text"
+                  placeholder="Ex: Maria Eduarda"
+                  value={newUserName}
+                  onChange={(event) => setNewUserName(event.target.value)}
+                  autoFocus
+                  required
+                />
+              </label>
+
+              <label className="form-field">
+                <span>CPF (11 dígitos)</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={14}
+                  placeholder="000.000.000-00"
+                  value={newUserCpf}
+                  onChange={(event) => setNewUserCpf(event.target.value)}
+                  required
+                />
+              </label>
+
+              <label className="form-field">
+                <span>UID do cartão RFID (opcional)</span>
+                <input
+                  type="text"
+                  placeholder="Ex: 01B46906"
+                  value={newUserCardUid}
+                  onChange={(event) => setNewUserCardUid(event.target.value.toUpperCase())}
+                />
+                <small>Se preenchido, o cartão já será vinculado e ativado para esta pessoa.</small>
+              </label>
+
+              <div className="modal-actions">
+                <button type="button" className="secondary-button" onClick={closeUserModal} disabled={submittingUser}>
+                  Cancelar
+                </button>
+                <button type="submit" className="primary-button" disabled={submittingUser}>
+                  {submittingUser ? 'Salvando...' : 'Salvar cadastro'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
