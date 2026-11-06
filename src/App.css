@@ -19,6 +19,7 @@
 .connection-dot.offline { background: #f27b61; }
 .main-content { width: 100%; max-width: 1500px; margin: 0 auto; padding: 0 52px; box-sizing: border-box; }
 .topbar { height: 68px; border-bottom: 1px solid #dfe5e0; display: flex; justify-content: space-between; align-items: center; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
 .breadcrumbs { color: #697670; font-size: 13px; }
 .breadcrumbs span { margin: 0 9px; color: #a0aaa4; }
 .refresh-button { border: 1px solid #cbd6cf; background: #fff; color: #203b32; padding: 8px 12px; font: 600 13px/1.2 inherit; cursor: pointer; }

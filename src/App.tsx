@@ -152,6 +152,7 @@ function App() {
   const [notices, setNotices] = useState<PageNotice[]>([])
   const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer | null>(null)
   const [transferringCard, setTransferringCard] = useState(false)
+  const [unlockingDoor, setUnlockingDoor] = useState(false)
 
   function showNotice(type: 'success' | 'error', title: string, message: string) {
     const id = Date.now() + Math.floor(Math.random() * 1000)
@@ -197,6 +198,25 @@ function App() {
   function refreshData() {
     setLoading(true)
     setRefreshKey((key) => key + 1)
+  }
+
+  async function handleRemoteUnlock() {
+    setUnlockingDoor(true)
+    try {
+      const logEntry = await post<AccessLog | null>('/access-logs/unlock', {})
+      if (logEntry && logEntry.id) {
+        setData((current) => ({
+          ...current,
+          logs: [logEntry, ...current.logs.filter((item) => item.id !== logEntry.id)],
+        }))
+      }
+      showNotice('success', 'Porta destrancada!', 'Comando de abertura enviado remotamente para a fechadura.')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao enviar comando de abertura para a porta'
+      showNotice('error', 'Falha ao abrir porta', message)
+    } finally {
+      setUnlockingDoor(false)
+    }
   }
 
   async function toggleCardStatus(card: Card) {
@@ -485,11 +505,13 @@ function App() {
             {logs.map((log) => {
               const card = log.card_id ? cardsById.get(log.card_id) : undefined
               const user = card ? usersById.get(card.user_id) : undefined
+              const isRemotePanel = log.card_uid === 'PAINEL_WEB'
+              const personLabel = isRemotePanel ? 'Abertura remota (Painel)' : (user?.name ?? 'Pessoa não identificada')
               const cardLabel = card?.card_uid || log.card_uid || (log.card_id ? `#${log.card_id}` : 'Desconhecido')
               return (
                 <tr key={log.id}>
                   <td><span className={`pill ${log.authorized ? 'pill-success' : 'pill-danger'}`}>{log.authorized ? 'Autorizado' : 'Negado'}</span></td>
-                  <td>{user?.name ?? 'Pessoa não identificada'}</td>
+                  <td>{personLabel}</td>
                   <td><code>{cardLabel}</code></td>
                   <td>{formatDate(log.accessed_at)}</td>
                 </tr>
@@ -618,9 +640,19 @@ function App() {
       <main className="main-content">
         <header className="topbar">
           <div className="breadcrumbs">IoT Lock <span>/</span> {titles[view]}</div>
-          <button className="refresh-button" type="button" onClick={refreshData} disabled={loading}>
-            <span aria-hidden="true">↻</span> Atualizar
-          </button>
+          <div className="topbar-actions">
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void handleRemoteUnlock()}
+              disabled={unlockingDoor}
+            >
+              {unlockingDoor ? 'Abrindo...' : 'Destrancar porta'}
+            </button>
+            <button className="refresh-button" type="button" onClick={refreshData} disabled={loading}>
+              <span aria-hidden="true">↻</span> Atualizar
+            </button>
+          </div>
         </header>
 
         <section className="page-heading">
