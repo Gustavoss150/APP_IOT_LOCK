@@ -1,129 +1,33 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import './App.css'
+import { AccessLogsTable } from './components/AccessLogsTable'
+import { CardModal } from './components/CardModal'
+import { CardsTable } from './components/CardsTable'
+import { OverviewStats } from './components/OverviewStats'
+import { Sidebar } from './components/Sidebar'
+import { ToastStack } from './components/ToastStack'
+import { Topbar } from './components/Topbar'
+import { UserModal } from './components/UserModal'
+import { UsersTable } from './components/UsersTable'
+import { del, get, patch, post, put } from './services/api'
+import type {
+  AccessLog,
+  Card,
+  ConnectionState,
+  DashboardData,
+  EnrollmentStatus,
+  PageNotice,
+  PendingTransfer,
+  User,
+  View,
+} from './types'
+import { formatDate } from './utils/formatters'
 
-type User = {
-  id: number
-  name: string
-  cpf: number
-}
-
-type Card = {
-  id: number
-  card_uid: string
-  user_id: number
-  active: boolean
-}
-
-type AccessLog = {
-  id: number
-  card_id: number | null
-  card_uid?: string
-  authorized: boolean
-  accessed_at: string
-}
-
-type EnrollmentStatus = {
-  active: boolean
-  user_id: number
-  card?: Card
-  conflict_card?: Card
-  error?: string
-}
-
-type PageNotice = {
-  id: number
-  type: 'success' | 'error'
-  title: string
-  message: string
-}
-
-type PendingTransfer = {
-  card: Card
-  targetUserId: number
-}
-
-type View = 'overview' | 'users' | 'cards' | 'accesses'
-type DashboardData = { users: User[]; cards: Card[]; logs: AccessLog[] }
-
-const apiBase = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
-
-async function get<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`)
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
-  }
-
-  return payload as T
-}
-
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
-  }
-
-  return payload as T
-}
-
-async function patch<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
-  }
-
-  return payload as T
-}
-
-async function put<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
-  }
-
-  return payload as T
-}
-
-async function del(path: string): Promise<void> {
-  const response = await fetch(`${apiBase}${path}`, {
-    method: 'DELETE',
-  })
-  const payload = await response.json().catch(() => null)
-
-  if (!response.ok) {
-    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
-  }
-}
-
-function formatCpf(cpf: number) {
-  const digits = String(cpf).padStart(11, '0')
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value))
+const titles: Record<View, string> = {
+  overview: 'Visão geral',
+  users: 'Pessoas',
+  cards: 'Cartões',
+  accesses: 'Registros de acesso',
 }
 
 function App() {
@@ -131,28 +35,31 @@ function App() {
   const [data, setData] = useState<DashboardData>({ users: [], cards: [], logs: [] })
   const [loading, setLoading] = useState(true)
   const [refreshKey, setRefreshKey] = useState(0)
-  const [connection, setConnection] = useState<'checking' | 'online' | 'partial' | 'offline'>('checking')
+  const [connection, setConnection] = useState<ConnectionState>('checking')
   const [errors, setErrors] = useState<string[]>([])
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+
   const [togglingCardId, setTogglingCardId] = useState<number | null>(null)
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
+  const [deletingCardId, setDeletingCardId] = useState<number | null>(null)
+  const [unlockingDoor, setUnlockingDoor] = useState(false)
+
   const [isUserModalOpen, setIsUserModalOpen] = useState(false)
   const [newUserName, setNewUserName] = useState('')
   const [newUserCpf, setNewUserCpf] = useState('')
   const [newUserCardUid, setNewUserCardUid] = useState('')
   const [modalError, setModalError] = useState<string | null>(null)
   const [submittingUser, setSubmittingUser] = useState(false)
-  const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
-  const [deletingCardId, setDeletingCardId] = useState<number | null>(null)
 
   const [isCardModalOpen, setIsCardModalOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<string>('')
   const [manualCardUid, setManualCardUid] = useState('')
   const [enrollingRfid, setEnrollingRfid] = useState(false)
   const [submittingCard, setSubmittingCard] = useState(false)
+
   const [notices, setNotices] = useState<PageNotice[]>([])
   const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer | null>(null)
   const [transferringCard, setTransferringCard] = useState(false)
-  const [unlockingDoor, setUnlockingDoor] = useState(false)
 
   function showNotice(type: 'success' | 'error', title: string, message: string) {
     const id = Date.now() + Math.floor(Math.random() * 1000)
@@ -184,7 +91,13 @@ function App() {
         logs: results[2].status === 'fulfilled' ? results[2].value ?? [] : current.logs,
       }))
       setErrors(failures.map((result) => (result as PromiseRejectedResult).reason.message))
-      setConnection(failures.length === 0 ? 'online' : failures.length === results.length ? 'offline' : 'partial')
+      setConnection(
+        failures.length === 0
+          ? 'online'
+          : failures.length === results.length
+            ? 'offline'
+            : 'partial',
+      )
 
       if (failures.length < results.length) {
         setUpdatedAt(new Date())
@@ -192,7 +105,9 @@ function App() {
       setLoading(false)
     })
 
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [refreshKey])
 
   function refreshData() {
@@ -229,7 +144,7 @@ function App() {
       }))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao atualizar status do cartão'
-      setErrors([message])
+      showNotice('error', 'Erro no cartão', message)
     } finally {
       setTogglingCardId(null)
     }
@@ -243,9 +158,10 @@ function App() {
         ...current,
         cards: current.cards.filter((item) => item.id !== card.id),
       }))
+      showNotice('success', 'Cartão excluído', `O cartão ${card.card_uid} foi removido.`)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao excluir cartão'
-      setErrors([message])
+      showNotice('error', 'Erro ao excluir', message)
     } finally {
       setDeletingCardId(null)
     }
@@ -326,9 +242,10 @@ function App() {
         users: current.users.filter((item) => item.id !== user.id),
         cards: current.cards.filter((card) => card.user_id !== user.id),
       }))
+      showNotice('success', 'Pessoa removida', `${user.name} foi excluída do sistema.`)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao remover pessoa'
-      setErrors([message])
+      showNotice('error', 'Erro ao excluir', message)
     } finally {
       setDeletingUserId(null)
     }
@@ -463,8 +380,14 @@ function App() {
                 : [...current.cards, enrolledCard],
             }
           })
-          const ownerName = data.users.find((u) => u.id === enrolledCard.user_id)?.name ?? `Pessoa #${enrolledCard.user_id}`
-          showNotice('success', 'Cartão lido na porta!', `O cartão ${enrolledCard.card_uid} foi vinculado a ${ownerName}.`)
+          const ownerName =
+            data.users.find((u) => u.id === enrolledCard.user_id)?.name ??
+            `Pessoa #${enrolledCard.user_id}`
+          showNotice(
+            'success',
+            'Cartão lido na porta!',
+            `O cartão ${enrolledCard.card_uid} foi vinculado a ${ownerName}.`,
+          )
         } else if (!status.active && status.error) {
           setEnrollingRfid(false)
           setIsCardModalOpen(false)
@@ -480,180 +403,19 @@ function App() {
 
   const usersById = new Map(data.users.map((user) => [user.id, user]))
   const cardsById = new Map(data.cards.map((card) => [card.id, card]))
-  const titles: Record<View, string> = {
-    overview: 'Visão geral',
-    users: 'Pessoas',
-    cards: 'Cartões',
-    accesses: 'Registros de acesso',
-  }
-
-  function renderAccesses(logs: AccessLog[]) {
-    if (!logs.length) return <p className="empty-state">Nenhum registro de acesso encontrado.</p>
-
-    return (
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Resultado</th>
-              <th>Pessoa</th>
-              <th>Cartão</th>
-              <th>Data e hora</th>
-            </tr>
-          </thead>
-          <tbody>
-            {logs.map((log) => {
-              const card = log.card_id ? cardsById.get(log.card_id) : undefined
-              const user = card ? usersById.get(card.user_id) : undefined
-              const isRemotePanel = log.card_uid === 'PAINEL_WEB'
-              const personLabel = isRemotePanel ? 'Abertura remota (Painel)' : (user?.name ?? 'Pessoa não identificada')
-              const cardLabel = card?.card_uid || log.card_uid || (log.card_id ? `#${log.card_id}` : 'Desconhecido')
-              return (
-                <tr key={log.id}>
-                  <td><span className={`pill ${log.authorized ? 'pill-success' : 'pill-danger'}`}>{log.authorized ? 'Autorizado' : 'Negado'}</span></td>
-                  <td>{personLabel}</td>
-                  <td><code>{cardLabel}</code></td>
-                  <td>{formatDate(log.accessed_at)}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
-
-  function renderUsers(users: User[]) {
-    if (!users.length) return <p className="empty-state">Nenhuma pessoa cadastrada.</p>
-
-    return (
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>Nome</th><th>CPF</th><th>Cartões</th><th>Ação</th></tr></thead>
-          <tbody>
-            {users.map((user) => {
-              const isDeleting = deletingUserId === user.id
-              return (
-                <tr key={user.id}>
-                  <td>{user.name}</td>
-                  <td><code>{formatCpf(user.cpf)}</code></td>
-                  <td>{data.cards.filter((card) => card.user_id === user.id).length}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="danger-button"
-                      disabled={isDeleting}
-                      onClick={() => void handleDeleteUser(user)}
-                    >
-                      {isDeleting ? 'Excluindo...' : 'Excluir'}
-                    </button>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
-
-  function renderCards(cards: Card[]) {
-    if (!cards.length) return <p className="empty-state">Nenhum cartão cadastrado.</p>
-
-    return (
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>UID</th><th>Pessoa</th><th>Status</th><th>Ações</th></tr></thead>
-          <tbody>
-            {cards.map((card) => {
-              const isToggling = togglingCardId === card.id
-              const isDeleting = deletingCardId === card.id
-              return (
-                <tr key={card.id}>
-                  <td><code>{card.card_uid}</code></td>
-                  <td>{usersById.get(card.user_id)?.name ?? `Pessoa #${card.user_id}`}</td>
-                  <td><span className={`pill ${card.active ? 'pill-success' : 'pill-muted'}`}>{card.active ? 'Ativo' : 'Inativo'}</span></td>
-                  <td>
-                    <div className="row-actions">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={card.active}
-                        disabled={isToggling || isDeleting}
-                        onClick={() => void toggleCardStatus(card)}
-                        className={`toggle-switch ${card.active ? 'is-active' : ''}`}
-                      >
-                        <span className="toggle-track">
-                          <span className="toggle-thumb" />
-                        </span>
-                        <span className="toggle-label">
-                          {isToggling ? 'Salvando...' : card.active ? 'Desativar' : 'Ativar'}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="danger-button"
-                        disabled={isDeleting || isToggling}
-                        onClick={() => void handleDeleteCard(card)}
-                      >
-                        {isDeleting ? 'Excluindo...' : 'Excluir'}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="#overview" onClick={() => setView('overview')}>
-          <span className="brand-mark" aria-hidden="true">IL</span>
-          <span><strong>IoT Lock</strong><small>CONTROLE DE ACESSO</small></span>
-        </a>
-
-        <div className="nav-label">GESTÃO</div>
-        <nav aria-label="Navegação principal">
-          {([
-            ['overview', 'Resumo', '01'],
-            ['users', 'Pessoas', '02'],
-            ['cards', 'Cartões', '03'],
-            ['accesses', 'Acessos', '04'],
-          ] as const).map(([id, label, number]) => (
-            <button key={id} className={`nav-item ${view === id ? 'selected' : ''}`} onClick={() => setView(id)}>
-              <span className="nav-number">{number}</span>{label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-bottom">
-          <span className={`connection-dot ${connection}`} />
-          <span>{connection === 'online' ? 'API conectada' : connection === 'checking' ? 'Conectando...' : connection === 'partial' ? 'API instável' : 'API desconectada'}</span>
-        </div>
-      </aside>
+      <Sidebar view={view} connection={connection} onSelectView={setView} />
 
       <main className="main-content">
-        <header className="topbar">
-          <div className="breadcrumbs">IoT Lock <span>/</span> {titles[view]}</div>
-          <div className="topbar-actions">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => void handleRemoteUnlock()}
-              disabled={unlockingDoor}
-            >
-              {unlockingDoor ? 'Abrindo...' : 'Destrancar porta'}
-            </button>
-            <button className="refresh-button" type="button" onClick={refreshData} disabled={loading}>
-              <span aria-hidden="true">↻</span> Atualizar
-            </button>
-          </div>
-        </header>
+        <Topbar
+          title={titles[view]}
+          loading={loading}
+          unlockingDoor={unlockingDoor}
+          onRefresh={refreshData}
+          onRemoteUnlock={() => void handleRemoteUnlock()}
+        />
 
         <section className="page-heading">
           <div>
@@ -663,27 +425,49 @@ function App() {
           </div>
           <div className="sync-note">
             <span className={`connection-dot ${connection}`} />
-            <span>{updatedAt ? `Sincronizado às ${updatedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'Aguardando API'}</span>
+            <span>
+              {updatedAt
+                ? `Sincronizado às ${updatedAt.toLocaleTimeString('pt-BR', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}`
+                : 'Aguardando API'}
+            </span>
           </div>
         </section>
 
         {errors.length > 0 && (
-          <div className={`alert ${connection === 'offline' ? 'alert-error' : 'alert-warning'}`} role="status">
-            <strong>{connection === 'offline' ? 'Não foi possível acessar a API.' : 'Alguns dados não foram carregados.'}</strong>
+          <div
+            className={`alert ${connection === 'offline' ? 'alert-error' : 'alert-warning'}`}
+            role="status"
+          >
+            <strong>
+              {connection === 'offline'
+                ? 'Não foi possível acessar a API.'
+                : 'Alguns dados não foram carregados.'}
+            </strong>
             <span>Confira se o serviço Go está rodando em localhost:8080. {errors[0]}</span>
           </div>
         )}
 
         {view === 'overview' && (
           <>
-            <section className="stats-grid" aria-label="Resumo dos cadastros">
-              <article className="stat-panel stat-coral"><div className="stat-top"><span>PESSOAS</span><span className="stat-index">01</span></div><strong>{loading && !updatedAt ? '—' : data.users.length}</strong><p>cadastros na API</p></article>
-              <article className="stat-panel stat-green"><div className="stat-top"><span>CARTÕES ATIVOS</span><span className="stat-index">02</span></div><strong>{loading && !updatedAt ? '—' : data.cards.filter((card) => card.active).length}</strong><p>de {data.cards.length} cartões cadastrados</p></article>
-              <article className="stat-panel stat-blue"><div className="stat-top"><span>EVENTOS RECENTES</span><span className="stat-index">03</span></div><strong>{loading && !updatedAt ? '—' : data.logs.length}</strong><p>registros retornados pela API</p></article>
-            </section>
+            <OverviewStats data={data} loading={loading} updatedAt={updatedAt} />
             <section className="data-section">
-              <div className="section-heading"><div><p className="eyebrow">MONITORAMENTO</p><h2>Últimos acessos</h2></div><button className="text-button" onClick={() => setView('accesses')}>Ver todos <span aria-hidden="true">→</span></button></div>
-              {renderAccesses(data.logs.slice(0, 8))}
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">MONITORAMENTO</p>
+                  <h2>Últimos acessos</h2>
+                </div>
+                <button className="text-button" onClick={() => setView('accesses')}>
+                  Ver todos <span aria-hidden="true">→</span>
+                </button>
+              </div>
+              <AccessLogsTable
+                logs={data.logs.slice(0, 8)}
+                cardsById={cardsById}
+                usersById={usersById}
+              />
             </section>
           </>
         )}
@@ -702,9 +486,15 @@ function App() {
                 </button>
               </div>
             </div>
-            {renderUsers(data.users)}
+            <UsersTable
+              users={data.users}
+              cards={data.cards}
+              deletingUserId={deletingUserId}
+              onDeleteUser={(user) => void handleDeleteUser(user)}
+            />
           </section>
         )}
+
         {view === 'cards' && (
           <section className="data-section">
             <div className="section-heading">
@@ -719,226 +509,77 @@ function App() {
                 </button>
               </div>
             </div>
-            {renderCards(data.cards)}
+            <CardsTable
+              cards={data.cards}
+              usersById={usersById}
+              togglingCardId={togglingCardId}
+              deletingCardId={deletingCardId}
+              onToggleCardStatus={(card) => void toggleCardStatus(card)}
+              onDeleteCard={(card) => void handleDeleteCard(card)}
+            />
           </section>
         )}
-        {view === 'accesses' && <section className="data-section"><div className="section-heading"><div><p className="eyebrow">AUDITORIA</p><h2>Histórico de acessos</h2></div><span className="record-count">{data.logs.length} registros</span></div>{renderAccesses(data.logs)}</section>}
 
-        <footer className="page-footer"><span>IoT Lock</span><span>{updatedAt ? `Última leitura ${formatDate(updatedAt.toISOString())}` : 'Sem leitura recente'}</span></footer>
+        {view === 'accesses' && (
+          <section className="data-section">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">AUDITORIA</p>
+                <h2>Histórico de acessos</h2>
+              </div>
+              <span className="record-count">{data.logs.length} registros</span>
+            </div>
+            <AccessLogsTable logs={data.logs} cardsById={cardsById} usersById={usersById} />
+          </section>
+        )}
+
+        <footer className="page-footer">
+          <span>IoT Lock</span>
+          <span>
+            {updatedAt
+              ? `Última leitura ${formatDate(updatedAt.toISOString())}`
+              : 'Sem leitura recente'}
+          </span>
+        </footer>
       </main>
 
-      {isUserModalOpen && (
-        <div className="modal-backdrop" role="presentation" onClick={closeUserModal}>
-          <div
-            className="modal-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="modal-user-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <p className="eyebrow">NOVO REGISTRO</p>
-                <h2 id="modal-user-title">Cadastrar pessoa</h2>
-              </div>
-              <button type="button" className="modal-close" aria-label="Fechar modal" onClick={closeUserModal}>
-                ×
-              </button>
-            </div>
+      <UserModal
+        isOpen={isUserModalOpen}
+        name={newUserName}
+        cpf={newUserCpf}
+        cardUid={newUserCardUid}
+        error={modalError}
+        submitting={submittingUser}
+        onChangeName={setNewUserName}
+        onChangeCpf={setNewUserCpf}
+        onChangeCardUid={setNewUserCardUid}
+        onClose={closeUserModal}
+        onSubmit={(event) => void handleCreateUser(event)}
+      />
 
-            <form className="modal-form" onSubmit={(event) => void handleCreateUser(event)}>
-              {modalError && <div className="alert alert-error">{modalError}</div>}
+      <CardModal
+        isOpen={isCardModalOpen}
+        users={data.users}
+        selectedUserId={selectedUserId}
+        manualCardUid={manualCardUid}
+        enrollingRfid={enrollingRfid}
+        submittingCard={submittingCard}
+        onChangeSelectedUser={setSelectedUserId}
+        onChangeManualUid={setManualCardUid}
+        onStartRfidEnrollment={() => void handleStartRfidEnrollment()}
+        onClose={() => void closeCardModal()}
+        onSubmitManual={(event) => void handleManualCardSubmit(event)}
+      />
 
-              <label className="form-field">
-                <span>Nome completo</span>
-                <input
-                  type="text"
-                  placeholder="Ex: Maria Eduarda"
-                  value={newUserName}
-                  onChange={(event) => setNewUserName(event.target.value)}
-                  autoFocus
-                  required
-                />
-              </label>
-
-              <label className="form-field">
-                <span>CPF (11 dígitos)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={14}
-                  placeholder="000.000.000-00"
-                  value={newUserCpf}
-                  onChange={(event) => setNewUserCpf(event.target.value)}
-                  required
-                />
-              </label>
-
-              <label className="form-field">
-                <span>UID do cartão RFID (opcional)</span>
-                <input
-                  type="text"
-                  placeholder="Ex: 01B46906"
-                  value={newUserCardUid}
-                  onChange={(event) => setNewUserCardUid(event.target.value.toUpperCase())}
-                />
-                <small>Se preenchido, o cartão já será vinculado e ativado para esta pessoa.</small>
-              </label>
-
-              <div className="modal-actions">
-                <button type="button" className="secondary-button" onClick={closeUserModal} disabled={submittingUser}>
-                  Cancelar
-                </button>
-                <button type="submit" className="primary-button" disabled={submittingUser}>
-                  {submittingUser ? 'Salvando...' : 'Salvar cadastro'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isCardModalOpen && (
-        <div className="modal-backdrop" role="presentation" onClick={() => void closeCardModal()}>
-          <div
-            className="modal-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="modal-card-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <p className="eyebrow">CREDENCIAIS RFID</p>
-                <h2 id="modal-card-title">Cadastrar cartão</h2>
-              </div>
-              <button type="button" className="modal-close" aria-label="Fechar modal" onClick={() => void closeCardModal()}>
-                ×
-              </button>
-            </div>
-
-            <form className="modal-form" onSubmit={(event) => void handleManualCardSubmit(event)}>
-              <label className="form-field">
-                <span>Vincular à pessoa</span>
-                <select
-                  value={selectedUserId}
-                  onChange={(event) => setSelectedUserId(event.target.value)}
-                  disabled={enrollingRfid}
-                  required
-                >
-                  <option value="" disabled>
-                    Selecione uma pessoa...
-                  </option>
-                  {data.users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name} ({formatCpf(user.cpf)})
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="rfid-enroll-box">
-                <div className="rfid-enroll-info">
-                  <strong>Leitura direta no RFID da porta</strong>
-                  <p>
-                    {enrollingRfid
-                      ? 'Modo cadastro ativo! Aproxime o cartão no leitor RFID da porta agora...'
-                      : 'Ative o modo cadastro e passe o cartão no leitor da fechadura para vinculá-lo automaticamente.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className={enrollingRfid ? 'secondary-button' : 'primary-button'}
-                  onClick={() => void (enrollingRfid ? closeCardModal() : handleStartRfidEnrollment())}
-                >
-                  {enrollingRfid ? 'Aguardando cartão na porta...' : 'Ler cartão no RFID da porta'}
-                </button>
-              </div>
-
-              <label className="form-field">
-                <span>Ou digite o UID manualmente (opcional)</span>
-                <input
-                  type="text"
-                  placeholder="Ex: 01B46906"
-                  value={manualCardUid}
-                  onChange={(event) => setManualCardUid(event.target.value.toUpperCase())}
-                  disabled={enrollingRfid}
-                />
-              </label>
-
-              <div className="modal-actions">
-                <button type="button" className="secondary-button" onClick={() => void closeCardModal()} disabled={submittingCard}>
-                  Cancelar
-                </button>
-                <button type="submit" className="primary-button" disabled={submittingCard || enrollingRfid || !manualCardUid.trim()}>
-                  {submittingCard ? 'Salvando...' : 'Salvar manualmente'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {(notices.length > 0 || pendingTransfer) && (
-        <div className="toast-stack" role="region" aria-label="Notificações do sistema">
-          {pendingTransfer && (
-            <div className="toast-card toast-warning" role="alertdialog" aria-labelledby="toast-transfer-title">
-              <div className="toast-head">
-                <strong id="toast-transfer-title">Cartão já vinculado a outra pessoa</strong>
-                <button
-                  type="button"
-                  className="toast-close"
-                  aria-label="Fechar aviso"
-                  onClick={() => setPendingTransfer(null)}
-                >
-                  ×
-                </button>
-              </div>
-              <p>
-                O cartão <code>{pendingTransfer.card.card_uid}</code> já pertence a{' '}
-                <strong>{usersById.get(pendingTransfer.card.user_id)?.name ?? `Pessoa #${pendingTransfer.card.user_id}`}</strong>.
-                Deseja transferi-lo para{' '}
-                <strong>{usersById.get(pendingTransfer.targetUserId)?.name ?? `Pessoa #${pendingTransfer.targetUserId}`}</strong>?
-              </p>
-              <div className="toast-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={transferringCard}
-                  onClick={() => setPendingTransfer(null)}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={transferringCard}
-                  onClick={() => void handleConfirmCardTransfer()}
-                >
-                  {transferringCard ? 'Transferindo...' : 'Confirmar transferência'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {notices.map((notice) => (
-            <div key={notice.id} className={`toast-card toast-${notice.type}`} role="status">
-              <div className="toast-head">
-                <strong>{notice.title}</strong>
-                <button
-                  type="button"
-                  className="toast-close"
-                  aria-label="Fechar notificação"
-                  onClick={() => dismissNotice(notice.id)}
-                >
-                  ×
-                </button>
-              </div>
-              <p>{notice.message}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <ToastStack
+        notices={notices}
+        pendingTransfer={pendingTransfer}
+        transferringCard={transferringCard}
+        usersById={usersById}
+        onDismissNotice={dismissNotice}
+        onCancelTransfer={() => setPendingTransfer(null)}
+        onConfirmTransfer={() => void handleConfirmCardTransfer()}
+      />
     </div>
   )
 }
