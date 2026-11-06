@@ -26,7 +26,20 @@ type EnrollmentStatus = {
   active: boolean
   user_id: number
   card?: Card
+  conflict_card?: Card
   error?: string
+}
+
+type PageNotice = {
+  id: number
+  type: 'success' | 'error'
+  title: string
+  message: string
+}
+
+type PendingTransfer = {
+  card: Card
+  targetUserId: number
 }
 
 type View = 'overview' | 'users' | 'cards' | 'accesses'
@@ -63,6 +76,21 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 async function patch<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(payload?.error || `A API respondeu com status ${response.status}`)
+  }
+
+  return payload as T
+}
+
+async function put<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -120,9 +148,22 @@ function App() {
   const [selectedUserId, setSelectedUserId] = useState<string>('')
   const [manualCardUid, setManualCardUid] = useState('')
   const [enrollingRfid, setEnrollingRfid] = useState(false)
-  const [cardModalError, setCardModalError] = useState<string | null>(null)
-  const [cardModalSuccess, setCardModalSuccess] = useState<string | null>(null)
   const [submittingCard, setSubmittingCard] = useState(false)
+  const [notices, setNotices] = useState<PageNotice[]>([])
+  const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer | null>(null)
+  const [transferringCard, setTransferringCard] = useState(false)
+
+  function showNotice(type: 'success' | 'error', title: string, message: string) {
+    const id = Date.now() + Math.floor(Math.random() * 1000)
+    setNotices((current) => [...current, { id, type, title, message }])
+    window.setTimeout(() => {
+      setNotices((current) => current.filter((item) => item.id !== id))
+    }, 4500)
+  }
+
+  function dismissNotice(id: number) {
+    setNotices((current) => current.filter((item) => item.id !== id))
+  }
 
   useEffect(() => {
     let active = true
@@ -243,6 +284,7 @@ function App() {
         cards: createdCard ? [...current.cards, createdCard] : current.cards,
       }))
       setIsUserModalOpen(false)
+      showNotice('success', 'Pessoa cadastrada', `${createdUser.name} foi adicionada com sucesso.`)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao cadastrar pessoa'
       setModalError(message)
@@ -277,8 +319,6 @@ function App() {
     setSelectedUserId(defaultUser)
     setManualCardUid('')
     setEnrollingRfid(false)
-    setCardModalError(null)
-    setCardModalSuccess(null)
     setIsCardModalOpen(true)
   }
 
@@ -292,25 +332,50 @@ function App() {
     }
     setEnrollingRfid(false)
     setIsCardModalOpen(false)
-    setCardModalError(null)
-    setCardModalSuccess(null)
   }
 
   async function handleStartRfidEnrollment() {
     const userIdNum = Number(selectedUserId)
     if (!userIdNum) {
-      setCardModalError('Selecione uma pessoa primeiro.')
+      showNotice('error', 'Atenção', 'Selecione uma pessoa primeiro.')
       return
     }
 
-    setCardModalError(null)
-    setCardModalSuccess(null)
     try {
       await post<EnrollmentStatus>('/cards/enrollment/start', { user_id: userIdNum })
       setEnrollingRfid(true)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao iniciar leitura pelo RFID da porta'
-      setCardModalError(message)
+      showNotice('error', 'Erro no leitor RFID', message)
+    }
+  }
+
+  async function handleConfirmCardTransfer() {
+    if (!pendingTransfer) return
+    const { card, targetUserId } = pendingTransfer
+
+    setTransferringCard(true)
+    try {
+      let updated: Card
+      try {
+        updated = await put<Card>(`/cards/${card.id}`, { user_id: targetUserId })
+      } catch {
+        await del(`/cards/${card.id}`)
+        updated = await post<Card>('/cards', { card_uid: card.card_uid, user_id: targetUserId })
+      }
+
+      setData((current) => ({
+        ...current,
+        cards: [...current.cards.filter((c) => c.id !== card.id && c.id !== updated.id), updated],
+      }))
+      const targetName = usersById.get(targetUserId)?.name ?? `Pessoa #${targetUserId}`
+      setPendingTransfer(null)
+      showNotice('success', 'Cartão transferido', `O cartão ${updated.card_uid} agora está vinculado a ${targetName}.`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao transferir cartão'
+      showNotice('error', 'Falha na transferência', message)
+    } finally {
+      setTransferringCard(false)
     }
   }
 
@@ -319,26 +384,34 @@ function App() {
     const userIdNum = Number(selectedUserId)
     const uid = manualCardUid.trim().toUpperCase()
     if (!userIdNum) {
-      setCardModalError('Selecione uma pessoa.')
+      showNotice('error', 'Atenção', 'Selecione uma pessoa.')
       return
     }
     if (!uid) {
-      setCardModalError('Passe o cartão no leitor da porta ou digite o UID manualmente.')
+      showNotice('error', 'Atenção', 'Passe o cartão no leitor da porta ou digite o UID manualmente.')
+      return
+    }
+
+    const existing = data.cards.find((c) => c.card_uid.toUpperCase() === uid)
+    if (existing && existing.user_id !== userIdNum) {
+      setIsCardModalOpen(false)
+      setPendingTransfer({ card: existing, targetUserId: userIdNum })
       return
     }
 
     setSubmittingCard(true)
-    setCardModalError(null)
     try {
       const created = await post<Card>('/cards', { card_uid: uid, user_id: userIdNum })
       setData((current) => ({
         ...current,
         cards: [...current.cards.filter((c) => c.id !== created.id), created],
       }))
+      const targetName = usersById.get(userIdNum)?.name ?? `Pessoa #${userIdNum}`
       setIsCardModalOpen(false)
+      showNotice('success', 'Cartão cadastrado', `Cartão ${created.card_uid} vinculado a ${targetName}.`)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao cadastrar cartão'
-      setCardModalError(message)
+      showNotice('error', 'Erro ao cadastrar cartão', message)
     } finally {
       setSubmittingCard(false)
     }
@@ -350,11 +423,17 @@ function App() {
     const timer = window.setInterval(async () => {
       try {
         const status = await get<EnrollmentStatus>('/cards/enrollment/status')
-        if (status.card) {
+        if (status.conflict_card) {
+          setEnrollingRfid(false)
+          setIsCardModalOpen(false)
+          setPendingTransfer({
+            card: status.conflict_card,
+            targetUserId: Number(selectedUserId) || status.user_id,
+          })
+        } else if (status.card) {
           const enrolledCard = status.card
           setEnrollingRfid(false)
-          setManualCardUid(enrolledCard.card_uid)
-          setCardModalSuccess(`Cartão ${enrolledCard.card_uid} lido na porta e vinculado com sucesso!`)
+          setIsCardModalOpen(false)
           setData((current) => {
             const exists = current.cards.some((c) => c.id === enrolledCard.id)
             return {
@@ -364,9 +443,12 @@ function App() {
                 : [...current.cards, enrolledCard],
             }
           })
+          const ownerName = data.users.find((u) => u.id === enrolledCard.user_id)?.name ?? `Pessoa #${enrolledCard.user_id}`
+          showNotice('success', 'Cartão lido na porta!', `O cartão ${enrolledCard.card_uid} foi vinculado a ${ownerName}.`)
         } else if (!status.active && status.error) {
           setEnrollingRfid(false)
-          setCardModalError(status.error)
+          setIsCardModalOpen(false)
+          showNotice('error', 'Tempo esgotado', status.error)
         }
       } catch {
         // Ignora falha transitória de polling
@@ -374,7 +456,7 @@ function App() {
     }, 1000)
 
     return () => window.clearInterval(timer)
-  }, [isCardModalOpen, enrollingRfid])
+  }, [isCardModalOpen, enrollingRfid, selectedUserId, data.users])
 
   const usersById = new Map(data.users.map((user) => [user.id, user]))
   const cardsById = new Map(data.cards.map((card) => [card.id, card]))
@@ -704,9 +786,6 @@ function App() {
             </div>
 
             <form className="modal-form" onSubmit={(event) => void handleManualCardSubmit(event)}>
-              {cardModalError && <div className="alert alert-error">{cardModalError}</div>}
-              {cardModalSuccess && <div className="alert alert-success">{cardModalSuccess}</div>}
-
               <label className="form-field">
                 <span>Vincular à pessoa</span>
                 <select
@@ -757,16 +836,75 @@ function App() {
 
               <div className="modal-actions">
                 <button type="button" className="secondary-button" onClick={() => void closeCardModal()} disabled={submittingCard}>
-                  Fechar
+                  Cancelar
                 </button>
-                {!cardModalSuccess && (
-                  <button type="submit" className="primary-button" disabled={submittingCard || enrollingRfid || !manualCardUid.trim()}>
-                    {submittingCard ? 'Salvando...' : 'Salvar manualmente'}
-                  </button>
-                )}
+                <button type="submit" className="primary-button" disabled={submittingCard || enrollingRfid || !manualCardUid.trim()}>
+                  {submittingCard ? 'Salvando...' : 'Salvar manualmente'}
+                </button>
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {(notices.length > 0 || pendingTransfer) && (
+        <div className="toast-stack" role="region" aria-label="Notificações do sistema">
+          {pendingTransfer && (
+            <div className="toast-card toast-warning" role="alertdialog" aria-labelledby="toast-transfer-title">
+              <div className="toast-head">
+                <strong id="toast-transfer-title">Cartão já vinculado a outra pessoa</strong>
+                <button
+                  type="button"
+                  className="toast-close"
+                  aria-label="Fechar aviso"
+                  onClick={() => setPendingTransfer(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <p>
+                O cartão <code>{pendingTransfer.card.card_uid}</code> já pertence a{' '}
+                <strong>{usersById.get(pendingTransfer.card.user_id)?.name ?? `Pessoa #${pendingTransfer.card.user_id}`}</strong>.
+                Deseja transferi-lo para{' '}
+                <strong>{usersById.get(pendingTransfer.targetUserId)?.name ?? `Pessoa #${pendingTransfer.targetUserId}`}</strong>?
+              </p>
+              <div className="toast-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={transferringCard}
+                  onClick={() => setPendingTransfer(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={transferringCard}
+                  onClick={() => void handleConfirmCardTransfer()}
+                >
+                  {transferringCard ? 'Transferindo...' : 'Confirmar transferência'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {notices.map((notice) => (
+            <div key={notice.id} className={`toast-card toast-${notice.type}`} role="status">
+              <div className="toast-head">
+                <strong>{notice.title}</strong>
+                <button
+                  type="button"
+                  className="toast-close"
+                  aria-label="Fechar notificação"
+                  onClick={() => dismissNotice(notice.id)}
+                >
+                  ×
+                </button>
+              </div>
+              <p>{notice.message}</p>
+            </div>
+          ))}
         </div>
       )}
     </div>
